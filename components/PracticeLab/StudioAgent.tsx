@@ -80,6 +80,10 @@ const StudioAgent: React.FC<StudioAgentProps> = ({ user }) => {
   const transcriptEndRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
+  // Fix: Track next audio start time for gapless playback and active sources for interruption handling
+  const nextStartTimeRef = useRef<number>(0);
+  const activeSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
+
   // Helper to scroll transcription
   useEffect(() => {
     if (showTranscript) {
@@ -139,7 +143,8 @@ const StudioAgent: React.FC<StudioAgentProps> = ({ user }) => {
       setStatus('Initializing secure lab...');
       setTranscriptionHistory([]);
       
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+      // Fix: Strictly use the environment API key
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
       inputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
       
@@ -162,6 +167,12 @@ const StudioAgent: React.FC<StudioAgentProps> = ({ user }) => {
           },
           systemInstruction: `${SYSTEM_INSTRUCTION}
           
+          CRITICAL SPEECH INSTRUCTION: 
+          Speak at approximately 75% of normal conversation speed. 
+          Use clear pauses between sentences. 
+          The user is a non-native speaker and needs more time to process your speech. 
+          Do not rush.
+
           CURRENT SCENARIO: ${selectedScenario.title}
           SCENARIO DETAILS: ${selectedScenario.prompt}
           
@@ -182,16 +193,27 @@ const StudioAgent: React.FC<StudioAgentProps> = ({ user }) => {
             const micSource = inputAudioContextRef.current!.createMediaStreamSource(stream);
             const scriptProcessor = inputAudioContextRef.current!.createScriptProcessor(4096, 1, 1);
             scriptProcessor.onaudioprocess = (e) => {
-              if (sessionRef.current) {
-                const inputData = e.inputBuffer.getChannelData(0);
-                const pcmBlob = createBlob(inputData);
-                sessionRef.current.sendRealtimeInput({ media: pcmBlob });
-              }
+              // Fix: CRITICAL - Solely rely on sessionPromise resolves to send realtime input
+              const inputData = e.inputBuffer.getChannelData(0);
+              const pcmBlob = createBlob(inputData);
+              sessionPromise.then((session) => {
+                session.sendRealtimeInput({ media: pcmBlob });
+              });
             };
             micSource.connect(scriptProcessor);
             scriptProcessor.connect(inputAudioContextRef.current!.destination);
           },
           onmessage: async (message: LiveServerMessage) => {
+            // Fix: Handle model interruptions
+            const interrupted = message.serverContent?.interrupted;
+            if (interrupted) {
+              for (const source of activeSourcesRef.current) {
+                source.stop();
+              }
+              activeSourcesRef.current.clear();
+              nextStartTimeRef.current = 0;
+            }
+
             if (message.serverContent?.inputTranscription) {
               setUserTranscription(prev => prev + message.serverContent!.inputTranscription!.text);
             }
@@ -211,16 +233,28 @@ const StudioAgent: React.FC<StudioAgentProps> = ({ user }) => {
 
             const audioData = message.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
             if (audioData) {
+              const audioContext = audioContextRef.current!;
+              // Fix: Implement gapless playback logic
+              nextStartTimeRef.current = Math.max(nextStartTimeRef.current, audioContext.currentTime);
+              
               const bytes = decode(audioData);
-              const buffer = await decodeAudioData(bytes, audioContextRef.current!, 24000, 1);
-              const source = audioContextRef.current!.createBufferSource();
+              const buffer = await decodeAudioData(bytes, audioContext, 24000, 1);
+              const source = audioContext.createBufferSource();
               source.buffer = buffer;
-              source.connect(audioContextRef.current!.destination);
-              source.start();
+              source.connect(audioContext.destination);
+              
+              source.addEventListener('ended', () => {
+                activeSourcesRef.current.delete(source);
+                if (activeSourcesRef.current.size === 0) {
+                  setStatus('Listening...');
+                }
+              });
+
+              source.start(nextStartTimeRef.current);
+              nextStartTimeRef.current += buffer.duration;
+              activeSourcesRef.current.add(source);
+              
               setStatus('Coach is speaking...');
-              source.onended = () => {
-                setStatus('Listening...');
-              };
             }
           },
           onerror: (e) => {
@@ -236,9 +270,15 @@ const StudioAgent: React.FC<StudioAgentProps> = ({ user }) => {
       });
 
       sessionRef.current = await sessionPromise;
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      setStatus('Access denied.');
+      // Fix: Handle expired API key/entity not found error
+      if (err.message?.includes('Requested entity was not found') && window.aistudio) {
+        setStatus('Key expired. Resetting...');
+        await window.aistudio.openSelectKey();
+      } else {
+        setStatus('Access denied.');
+      }
       setIsConnecting(false);
     }
   };
@@ -247,8 +287,14 @@ const StudioAgent: React.FC<StudioAgentProps> = ({ user }) => {
     if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
     sessionRef.current?.close();
     streamRef.current?.getTracks().forEach(t => t.stop());
-    audioContextRef.current?.close();
-    inputAudioContextRef.current?.close();
+    if (audioContextRef.current?.state !== 'closed') audioContextRef.current?.close();
+    if (inputAudioContextRef.current?.state !== 'closed') inputAudioContextRef.current?.close();
+    
+    // Fix: Clean up active sources and playback tracking
+    activeSourcesRef.current.forEach(s => { try { s.stop(); } catch(e) {} });
+    activeSourcesRef.current.clear();
+    nextStartTimeRef.current = 0;
+    
     setIsActive(false);
     setIsConnecting(false);
     setStatus('Tap to start your session');

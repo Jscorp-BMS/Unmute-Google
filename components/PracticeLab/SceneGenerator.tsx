@@ -1,6 +1,6 @@
 
-import React, { useState } from 'react';
 import { GoogleGenAI } from '@google/genai';
+import React, { useState } from 'react';
 import { User } from '../../types';
 
 interface SceneGeneratorProps {
@@ -20,44 +20,53 @@ const SceneGenerator: React.FC<SceneGeneratorProps> = ({ user }) => {
     setIsGenerating(true);
     setError(null);
     try {
-      // Use process.env.API_KEY directly as per guidelines
+      // Create new instance using strictly injected process.env.API_KEY
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      
       const response = await ai.models.generateContent({
         model: 'gemini-2.5-flash-image',
         contents: {
           parts: [
             {
-              text: `A professional, clear photograph of ${finalPrompt} for an English conversation practice. High resolution, realistic lighting.`,
+              text: `A hyper-realistic, high-quality photograph of ${finalPrompt} for professional English conversation practice. Wide angle, cinematic lighting, realistic environment.`,
             },
           ],
         },
         config: {
           imageConfig: {
-            aspectRatio: "16:9"
-          }
+            aspectRatio: '16:9',
+          },
         },
       });
 
-      let imageUrl = null;
-      // Safety check for candidates and content
-      const candidate = response.candidates?.[0];
-      if (candidate && candidate.content && candidate.content.parts) {
-        for (const part of candidate.content.parts) {
+      let base64Data = '';
+      let mimeType = 'image/png';
+
+      // Iterate through parts to find the image as per guidelines
+      if (response.candidates?.[0]?.content?.parts) {
+        for (const part of response.candidates[0].content.parts) {
           if (part.inlineData) {
-            imageUrl = `data:${part.inlineData.mimeType || 'image/png'};base64,${part.inlineData.data}`;
+            base64Data = part.inlineData.data;
+            mimeType = part.inlineData.mimeType;
             break;
           }
         }
       }
-
-      if (imageUrl) {
-        setGeneratedImage(imageUrl);
+      
+      if (base64Data) {
+        setGeneratedImage(`data:${mimeType};base64,${base64Data}`);
       } else {
-        setError('The model did not return an image. This might be due to safety filters or a temporary issue. Please try a more specific prompt.');
+        throw new Error('No image returned by the model.');
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Image generation error:', err);
-      setError('Failed to reach the AI Studio. Please ensure your connection is stable and try again.');
+      
+      if (err.message?.includes('Requested entity was not found') && window.aistudio) {
+        setError('Your API key access has expired or is restricted. Re-selecting key...');
+        await window.aistudio.openSelectKey();
+      } else {
+        setError('The AI model encountered an issue or blocked the request. Please try a different description or ensure your paid API key is active.');
+      }
     } finally {
       setIsGenerating(false);
     }
@@ -89,8 +98,8 @@ const SceneGenerator: React.FC<SceneGeneratorProps> = ({ user }) => {
   return (
     <div className="flex flex-col h-full p-6 md:p-8 space-y-6">
       <div className="text-left">
-        <h3 className="text-xl font-bold text-[#0A192F]">Scenario Generator</h3>
-        <p className="text-sm text-slate-500">Visualize where you want to practice your English today.</p>
+        <h3 className="text-xl font-bold text-[#0A192F]">Visual Context Lab</h3>
+        <p className="text-sm text-slate-500">Generate high-quality scenes to anchor your speaking practice.</p>
       </div>
 
       {!generatedImage && !isGenerating && (
@@ -118,14 +127,17 @@ const SceneGenerator: React.FC<SceneGeneratorProps> = ({ user }) => {
                <svg className="w-8 h-8 text-[#D4AF37] animate-pulse" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14.5v-9l6 4.5-6 4.5z"/></svg>
             </div>
           </div>
-          <p className="text-[#0A192F] font-bold animate-pulse text-center">Shashtika AI is painting your scene...<br/><span className="text-xs font-normal text-slate-400">This usually takes about 5-10 seconds.</span></p>
+          <div className="text-center">
+            <p className="text-[#0A192F] font-bold animate-pulse">Shashtika AI is generating your high-fidelity scene...</p>
+            <p className="text-xs text-slate-400 mt-1">Harnessing Gemini Vision for maximum realism.</p>
+          </div>
         </div>
       )}
 
       {generatedImage && (
         <div className="flex-grow space-y-4 animate-fade-in">
-          <div className="relative rounded-3xl overflow-hidden shadow-2xl border border-slate-100 group">
-            <img src={generatedImage} alt="Generated Practice Scene" className="w-full h-auto object-cover transition-transform duration-700 hover:scale-105" />
+          <div className="relative rounded-3xl overflow-hidden shadow-2xl border border-slate-100 group aspect-video bg-slate-100">
+            <img src={generatedImage} alt="Generated Practice Scene" className="w-full h-full object-cover transition-transform duration-700 hover:scale-105" />
             <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
             <button 
               onClick={() => setGeneratedImage(null)}
@@ -135,12 +147,11 @@ const SceneGenerator: React.FC<SceneGeneratorProps> = ({ user }) => {
             </button>
           </div>
           <div className="p-4 bg-[#D4AF37]/10 rounded-2xl border border-[#D4AF37]/20">
-             <p className="text-sm font-bold text-[#0A192F] flex items-center mb-1">
-                <svg className="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20"><path d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z"/></svg>
-                Visual Practice Guide:
+             <p className="text-sm font-bold text-[#0A192F] flex items-center mb-1 uppercase tracking-tighter">
+                Visual Immersion Tip:
              </p>
-             <p className="text-xs text-[#0A192F] italic">
-               "Imagine you are in this setting. What is the first thing you say to the person next to you? Try using 'Excuse me...' or 'I was wondering if...'"
+             <p className="text-xs text-[#0A192F] leading-relaxed">
+               "Describe 3 things you see in this scene. Focus on the 'S' and 'SH' sounds. For example: 'I see a <strong>sh</strong>ining gla<strong>ss</strong> de<strong>sk</strong>.'"
              </p>
           </div>
         </div>
@@ -148,7 +159,10 @@ const SceneGenerator: React.FC<SceneGeneratorProps> = ({ user }) => {
 
       {error && (
         <div className="p-4 bg-red-50 text-red-600 rounded-xl text-xs font-medium border border-red-100 animate-shake">
-          {error}
+          <div className="flex items-center">
+            <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            {error}
+          </div>
         </div>
       )}
 
@@ -157,7 +171,7 @@ const SceneGenerator: React.FC<SceneGeneratorProps> = ({ user }) => {
           type="text" 
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
-          placeholder="Describe your practice scene (e.g. A busy London office)"
+          placeholder="Describe your custom scenario (e.g. A team lunch in Singapore)"
           className="flex-grow bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-[#D4AF37]/50 focus:border-[#D4AF37] outline-none"
         />
         <button 
@@ -170,21 +184,10 @@ const SceneGenerator: React.FC<SceneGeneratorProps> = ({ user }) => {
       </div>
 
       <style>{`
-        @keyframes fade-in {
-          from { opacity: 0; transform: translateY(10px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-        @keyframes shake {
-          0%, 100% { transform: translateX(0); }
-          25% { transform: translateX(-4px); }
-          75% { transform: translateX(4px); }
-        }
-        .animate-fade-in {
-          animation: fade-in 0.5s ease-out forwards;
-        }
-        .animate-shake {
-          animation: shake 0.3s ease-in-out;
-        }
+        @keyframes fade-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes shake { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-4px); } 75% { transform: translateX(4px); } }
+        .animate-fade-in { animation: fade-in 0.5s ease-out forwards; }
+        .animate-shake { animation: shake 0.3s ease-in-out; }
       `}</style>
     </div>
   );
