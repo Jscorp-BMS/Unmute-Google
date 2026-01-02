@@ -1,0 +1,7 @@
+{
+  "name": "Unmute",
+  "description": "Unmute your potential. A premium coaching service for Tamil-speaking professionals to master English fluency with a Native English coach.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
